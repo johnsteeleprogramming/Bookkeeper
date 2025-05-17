@@ -1,0 +1,7 @@
+pandas
+openai 
+python-dotenv
+flask 
+matplotlib
+numpy
+pillow

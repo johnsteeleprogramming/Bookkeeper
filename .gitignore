@@ -1,0 +1,12 @@
+# Virtual environments
+venv/
+myagentenv/
+.env
+
+# Data and generated files
+uploads/
+static/plots/
+
+# Python cache
+__pycache__/
+*.pyc
