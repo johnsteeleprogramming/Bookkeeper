@@ -9,12 +9,11 @@ from data_utils import save_uploaded_file
 from ai_handler import analyze_data, generate_visualization
 
 
-# --- Configuration ---
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'csv'}
 SECRET_KEY = 'change_this_to_a_secure_random_value'
 
-# --- App Init ---
+
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -28,7 +27,7 @@ def allowed_file(filename):
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-# --- Routes ---
+
 
 @app.route('/reset')
 def reset():
@@ -61,7 +60,7 @@ def index():
     csv_loaded = 'csv_path' in session and os.path.exists(session['csv_path'])
     table_preview = None
     if csv_loaded:
-        df = pd.read_csv(session['csv_path'])
+        df = pd.read_csv(session['csv_path'],encoding='ISO-8859-1')
         table_preview = df.head(3).to_html(
             classes="table table-striped table-bordered",
             index=False
@@ -85,7 +84,7 @@ def visualize():
         flash('Please enter a visualization request.', 'warning')
         return redirect(url_for('index'))
 
-    # Load data and generate
+   
     df = pd.read_csv(session['csv_path'])
     image_filename = generate_visualization(df, query)
     if image_filename:
@@ -95,7 +94,7 @@ def visualize():
         image_url = None
         flash('Failed to generate visualization.', 'danger')
 
-    # Render same index template, with active tab
+
     table_preview = df.head(3).to_html(
         classes="table table-striped table-bordered",
         index=False
@@ -121,12 +120,16 @@ def ask():
         flash('Please enter a question.', 'warning')
         return redirect(url_for('index'))
 
-    # Load data and analyze
-    df = pd.read_csv(session['csv_path'])
+
+    df = pd.read_csv(session['csv_path'], encoding='ISO-8859-1')
     response = analyze_data(df, query, mode='qa')
+    print('Response',response)
+    print('Test App')
 
     import re
     answer = re.search(r'Answer:\s*(.*?)(?=\n|$)', response, re.IGNORECASE)
+    print('Answer',answer)
+    #print(answer.group(1))
     reason = re.search(r'Reason:\s*(.*?)(?=\n|$)', response, re.IGNORECASE)
     stats = re.search(r'Stats:\s*(.*?)(?=\n|$)', response, re.IGNORECASE)
 

@@ -10,3 +10,8 @@ static/plots/
 # Python cache
 __pycache__/
 *.pyc
+# CSV
+csv/
+
+#SampleDB
+sample.db

@@ -25,6 +25,12 @@ def clean_code(code: str) -> str:
 
 
 def analyze_data(df: pd.DataFrame, query: str, mode: str) -> str:
+    lower_query = query.lower()
+    related = any(col.lower() in lower_query for col in df.columns)
+
+    if not related:
+        print('I dont know')
+        return "I not Know."
     if len(df) > MAX_ROWS:
         df_sample = df.sample(MAX_ROWS, random_state=42)
     else:
