@@ -19,7 +19,7 @@ graph/
 temp/
 
 # Testing files
-bookkeeper.testing.py
+bookkeeper_testing.py
 test_code.py
 test_graph_agent.py
 
