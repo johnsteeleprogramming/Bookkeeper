@@ -1,17 +1,27 @@
+# Python cache
+__pycache__/
+*.pyc
+
 # Virtual environments
 venv/
 myagentenv/
 .env
 
 # Data and generated files
-uploads/
-static/plots/
+*.db
+*.png
+uploaded.csv
 
-# Python cache
-__pycache__/
-*.pyc
-# CSV
+# Generated folders
 csv/
+db/
+graph/
+temp/
 
-#SampleDB
-sample.db
+# Testing files
+bookkeeper.testing.py
+test_code.py
+test_graph_agent.py
+
+# Presentation PowerPoint
+*.odp

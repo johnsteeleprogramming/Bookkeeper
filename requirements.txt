@@ -1,7 +1,7 @@
+fastapi
+uvicorn
 pandas
-openai 
-python-dotenv
-flask 
 matplotlib
-numpy
-pillow
+python-dotenv
+openai-agents
+aiofiles
