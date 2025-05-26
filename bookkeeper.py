@@ -9,6 +9,9 @@ from fastapi import FastAPI, Form, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.requests import Request
 from openai import OpenAI
 from agents import Agent, Runner, function_tool, ModelSettings
 from datetime import datetime
@@ -29,7 +32,7 @@ GRAPH_DIR = 'graph/'
 GRAPH_PATH = os.path.join(GRAPH_DIR, 'graph.png')
 GRAPH_TYPE = 'line'
 OPENAI_MODEL = 'gpt-4o-mini'
-OPENAI_TEMPERATURE = 0.8
+OPENAI_TEMPERATURE = 0.8    
 
 
 os.makedirs(CSV_DIR, exist_ok=True)
@@ -49,6 +52,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 def read_csv_handle_duplicate_columns(file_path):
     try:
@@ -235,12 +241,17 @@ async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = F
 
     return JSONResponse(content={"response": result.final_output})
 
+@app.get("/")
+async def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
+'''
 @app.get("/")
 async def home():
     now = datetime.now()
     date_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
     return f"Testing program.  Bookkeeper reached.  {date_time_str}"
+'''
 
 if __name__ == "__main__":
     uvicorn.run("bookkeeper:app", host="127.0.0.1", port=6000, reload=True)
