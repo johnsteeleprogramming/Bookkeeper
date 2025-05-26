@@ -2,12 +2,16 @@ import os
 import sqlite3
 import json
 import uvicorn
+from typing import Optional
 import pandas as pd
 import matplotlib.pyplot as plt
 from fastapi import FastAPI, Form, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.requests import Request
 from openai import OpenAI
 from agents import Agent, Runner, function_tool, ModelSettings
 from datetime import datetime
@@ -28,7 +32,7 @@ GRAPH_DIR = 'graph/'
 GRAPH_PATH = os.path.join(GRAPH_DIR, 'graph.png')
 GRAPH_TYPE = 'line'
 OPENAI_MODEL = 'gpt-4o-mini'
-OPENAI_TEMPERATURE = 0.8
+OPENAI_TEMPERATURE = 0.8    
 
 
 os.makedirs(CSV_DIR, exist_ok=True)
@@ -48,6 +52,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 def read_csv_handle_duplicate_columns(file_path):
     try:
@@ -93,12 +100,23 @@ def generate_sql(user_question: str, dataframe_sample: str) -> str:
     It does not call a nested agent. The outer agent will use this tool based on its instructions.
     """
     return f"""
-    You are a SQL generator. Based on the table sample below and the user’s question,
-    generate a SQL query that uses the table named `db_table`.
+    You are a SQL generator. Based on the table sample below and the user's question,
+    generate a valid SQL query that uses the table named `db_table`.
 
-    - Only use the columns shown in the sample
-    - Do not add explanation or formatting
-    - Just return a valid SQL query
+    Your goals:
+    - Use only the column names shown in the sample.
+    - Match user intent to column names even if the wording is different.
+    - Try synonyms (e.g., 'rain' might map to 'precip', 'temperature' to 'temp').
+    - Match abbreviations or shorthand (e.g., 'humidity' for 'hum', 'wind' for 'windgust' or 'windspeed').
+    - Avoid guessing new columns that are not in the sample.
+    - Return a **valid SQL SELECT query** only — no explanations or extra text.
+
+    Example column name mappings:
+    - rain → precip
+    - temperature → temp, tempmax, tempmin
+    - wind → windspeed, windgust
+    - pressure → sealevelpressure
+    - humidity → humidity
 
     Table sample:
     {dataframe_sample}
@@ -183,14 +201,16 @@ def graph_save(code_str: str)->str:
 
 
 @app.post("/bookkeeper")
-async def upload_and_ask(file: UploadFile = File(...), query: str = Form(...)):
+async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = Form(...)):
     if not os.path.exists(CSV_PATH) and not file:
         raise HTTPException(status_code=400, detail="NO DATA FOUND. CANNOT ANSWER QUESTIONS WITHOUT DATA.")
-    contents = await file.read()
-    with open(CSV_PATH, 'wb') as f:
-        f.write(contents)
-    save_csv_to_sqlite_and_save_file(CSV_PATH)
-    logger.info(f"File {os.path.basename(file.filename)} saved successfully to database")
+    if file:
+        contents = await file.read()
+        with open(CSV_PATH, 'wb') as f:
+            f.write(contents)
+        save_csv_to_sqlite_and_save_file(CSV_PATH)
+        logger.info(f"File {os.path.basename(file.filename)} saved successfully to database")
+
     logger.info(f"ask() - USER QUERY: {query}")
 
     df = pd.read_csv(CSV_PATH).head(50)
@@ -217,16 +237,22 @@ async def upload_and_ask(file: UploadFile = File(...), query: str = Form(...)):
     logger.info(f"Agent result: {result.final_output}")
 
     if 'GRAPH CREATED' in result.final_output:
-        return FileResponse(GRAPH_PATH, media_type="image/png", filename="graph.png")
+        now = datetime.now()
+        date_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        headers = {
+            "X-Author" : "Bookkeeper Agents",
+            "X-Description" : result.final_output,
+            "X-Created-Date" : date_time_str
+        }
+        return FileResponse(path=GRAPH_PATH, media_type="image/png", filename="graph.png", headers=headers)
 
     return JSONResponse(content={"response": result.final_output})
 
 
 @app.get("/")
-async def home():
-    now = datetime.now()
-    date_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
-    return f"Testing program.  Bookkeeper TESTING reached.  {date_time_str}"
+async def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
 
 if __name__ == "__main__":
     uvicorn.run("bookkeeper_testing:app", host="127.0.0.1", port=8000, reload=True)
