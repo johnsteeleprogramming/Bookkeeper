@@ -237,21 +237,22 @@ async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = F
     logger.info(f"Agent result: {result.final_output}")
 
     if 'GRAPH CREATED' in result.final_output:
-        return FileResponse(GRAPH_PATH, media_type="image/png", filename="graph.png")
+        now = datetime.now()
+        date_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        headers = {
+            "X-Author" : "Bookkeeper Agents",
+            "X-Description" : result.final_output,
+            "X-Created-Date" : date_time_str
+        }
+        return FileResponse(path=GRAPH_PATH, media_type="image/png", filename="graph.png", headers=headers)
 
     return JSONResponse(content={"response": result.final_output})
+
 
 @app.get("/")
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-'''
-@app.get("/")
-async def home():
-    now = datetime.now()
-    date_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
-    return f"Testing program.  Bookkeeper reached.  {date_time_str}"
-'''
 
 if __name__ == "__main__":
     uvicorn.run("bookkeeper:app", host="127.0.0.1", port=6000, reload=True)
