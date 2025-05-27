@@ -12,8 +12,8 @@ async def bookkeeper(csv_file: str = None, query: str = None) -> str:
             data = {"query": query}
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
-                    #"https://53c4-96-89-67-41.ngrok-free.app/bookkeeper",
-                    "http://127.0.0.1:6000/bookkeeper",
+                    "https://53c4-96-89-67-41.ngrok-free.app/bookkeeper",
+                    #"http://127.0.0.1:6000/bookkeeper",
                     data=data
                 )
         else:
@@ -23,8 +23,8 @@ async def bookkeeper(csv_file: str = None, query: str = None) -> str:
                 data = {"query": query}
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     response = await client.post(
-                        #"https://53c4-96-89-67-41.ngrok-free.app/bookkeeper",
-                        "http://127.0.0.1:6000/bookkeeper",
+                        "https://53c4-96-89-67-41.ngrok-free.app/bookkeeper",
+                        #"http://127.0.0.1:6000/bookkeeper",
                         files=file,
                         data=data
                     )
@@ -62,8 +62,8 @@ async def test_home() -> str:
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.get(
-                #"https://53c4-96-89-67-41.ngrok-free.app/"
-                "http://127.0.0.1:6000/"
+                "https://53c4-96-89-67-41.ngrok-free.app/"
+                #"http://127.0.0.1:6000/"
 
             )
         if response.status_code == 200:
@@ -77,8 +77,8 @@ async def test_home() -> str:
 
 csv_file = "test/atlanta.csv"
 #csv_file = ''
-question = "Plot a graph that shows temperatures for the first week of 2010."
-
+#question = "Plot a graph that shows temperatures for the first week of 2010."
+question = "What is the average temperature for 1985?"
 result = asyncio.run(bookkeeper(csv_file, question))
 #result = asyncio.run(test_home())
 print(result)

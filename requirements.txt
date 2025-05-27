@@ -2,6 +2,11 @@ fastapi
 uvicorn
 pandas
 matplotlib
+prophet
 python-dotenv
-openai-agents
-aiofiles
+jinja2
+openai
+agents
+prophet
+cmdstanpy
+pystan

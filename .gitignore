@@ -10,18 +10,18 @@ myagentenv/
 # Data and generated files
 *.db
 *.png
+*.csv
 uploaded.csv
+temp_results.csv
 
 # Generated folders
 csv/
 db/
 graph/
 temp/
+test/
 
 # Testing files
 bookkeeper_testing.py
 test_code.py
 test_graph_agent.py
-
-# Presentation PowerPoint
-*.odp
