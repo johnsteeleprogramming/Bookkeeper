@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import sqlite3
 import logging
 from datetime import datetime
@@ -16,6 +17,8 @@ from fastapi.requests import Request
 from dotenv import load_dotenv
 import uvicorn
 from agents import Agent, Runner, function_tool, ModelSettings
+from charset_normalizer import from_bytes
+
 
 load_dotenv()
 
@@ -325,15 +328,20 @@ async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = F
     logger.info('*'*50)
     if not os.path.exists(CSV_PATH) and not file:
         raise HTTPException(status_code=400, detail="NO DATA FOUND. CANNOT ANSWER QUESTIONS WITHOUT DATA.")
+    logger.info(f"ask() - USER QUERY: {query}")
 
     if file:
         contents = await file.read()
-        with open(CSV_PATH, 'wb') as f:
-            f.write(contents)
+        result = from_bytes(contents).best()
+        encoding = result.encoding or 'utf-8'
+        logger.info(f"CSV input file encoding: {encoding}")
+        decoded_contents = contents.decode(encoding)
+
+        with open(CSV_PATH, 'w', encoding='utf-8') as f:
+            f.write(decoded_contents)
+
         save_csv_to_sqlite_and_save_file(CSV_PATH)
         logger.info(f"File {os.path.basename(file.filename)} saved successfully to database")
-
-    logger.info(f"ask() - USER QUERY: {query}")
 
     df = pd.read_csv(CSV_PATH).head(50)
     column_list = ", ".join(df.columns)
@@ -391,13 +399,11 @@ async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = F
 
     if 'FORECAST_COLUMNS:' in result.final_output:
         try:
-            import re
-
-            match = re.search(r'FORECAST_COLUMNS:\s*(```json)?\s*(\{.*?\})\s*(```)?', result.final_output, re.DOTALL)
-            if not match:
+            cleaned_output = re.sub(r"```(?:sql)?\s*([\s\S]*?)\s*```", r"\1", result.final_output).strip()
+            if not cleaned_output:
                 raise ValueError("Could not extract JSON block from FORECAST_COLUMNS output.")
 
-            columns_str = match.group(2).strip()
+            columns_str = cleaned_output.group(2).strip()
             columns_dict = parse_columns_dict(columns_str)
             graph_result = graph_timeseries(json.dumps(columns_dict))
             logger.info(f"Graph generation result: {graph_result}")
@@ -437,3 +443,4 @@ async def home(request: Request):
 
 if __name__ == "__main__":
     uvicorn.run("bookkeeper:app", host="127.0.0.1", port=6000, reload=True)
+    # pip freeze > requirements.txt   # or poetry
