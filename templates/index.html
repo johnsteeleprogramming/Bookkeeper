@@ -47,7 +47,13 @@ document.getElementById('queryForm').addEventListener('submit', async function(e
             resultDiv.innerHTML = `<img src="${url}" class="img-fluid mt-3 rounded shadow" alt="Graph">`;
         } else {
             const data = await response.json();
-            resultDiv.innerHTML = `<pre class="text-start bg-white p-3 border rounded">${JSON.stringify(data, null, 2)}</pre>`;
+            let responseText = data.response || "No response returned.";
+
+            if (typeof responseText === "string" && responseText.match(/\d+\.\s+/)) {
+                const lines = responseText.split(/(?=\d+\.\s)/g);
+                responseText = lines.map(line => `<div>${line.trim()}</div>`).join("");
+            }
+            resultDiv.innerHTML = `<div class="bg-white p-3 border rounded text-start">${responseText}</div>`;
         }
     } catch (err) {
         console.error(err);

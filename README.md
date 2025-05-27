@@ -1,39 +1,23 @@
-# Bookkeeper: AI-Powered CSV Q&A and Graphing API
+# 📊 Bookkeeper: Data Assistant with OpenAI Agents
 
-This project is a FastAPI-based application that uses OpenAI's Agent SDK to answer questions and generate graphs from an uploaded CSV file.
-
----
-
-## 🔧 Features
-
-- Upload a CSV file
-- Ask natural language questions about the data
-- Automatically generates SQL queries using OpenAI
-- Returns answers in natural language or creates graphs as PNG images
-- All are done with the same API call /bookkeeper.
-- Needs a CSV first, atlanta.csv has been included to help test.
-- Don't need to include the file with every API call, the file is optional
-- In the API call use 'file' to upload a file and 'query' to ask a question or request a graph.
-- There is also just '/' to test the connection.
-- I have include a file test_connection.py to test this bookkeeper locally.
-- Run the bookkeeper app and then test in test_connection.py
-- This program will either return a string or a file depending on the request.
+**Bookkeeper** is a FastAPI-powered web application that allows users to upload CSV files and ask natural language questions about their data. It uses OpenAI's Agent SDK to interpret questions, generate SQL queries, visualize data, and even forecast time series trends with Prophet.
 
 ---
 
-## 🗂️ Directory Structure
+## 🚀 Features
 
-- `csv/`: Stores uploaded CSVs
-- `db/`: SQLite database generated from the CSV
-- `graph/`: Generated graphs saved as PNG
-- `temp/`: Intermediate files (`.csv`, `.json`, `.txt`)
-- These are created by the program.
+- Upload a CSV and ask questions about the contents
+- Automatically generates and runs SQL queries
+- Builds and returns plots using matplotlib
+- Detects time series patterns and forecasts future values
+- Uses OpenAI's `Agent`, `Runner`, and `FunctionTool` SDK
+- Beautiful Bootstrap-based frontend UI
 
 ---
 
-## 🚀 Running the App
+## 📦 Requirements
 
-### 1. Install dependencies
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt

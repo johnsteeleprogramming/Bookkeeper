@@ -1,21 +1,21 @@
 import os
-import sqlite3
 import json
-import uvicorn
+import sqlite3
+import logging
+from datetime import datetime
 from typing import Optional
 import pandas as pd
 import matplotlib.pyplot as plt
+from prophet import Prophet
 from fastapi import FastAPI, Form, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
-from openai import OpenAI
+from dotenv import load_dotenv
+import uvicorn
 from agents import Agent, Runner, function_tool, ModelSettings
-from datetime import datetime
-import logging
 
 load_dotenv()
 
@@ -31,8 +31,8 @@ TABLE_NAME = 'db_table'
 GRAPH_DIR = 'graph/'
 GRAPH_PATH = os.path.join(GRAPH_DIR, 'graph.png')
 GRAPH_TYPE = 'line'
-OPENAI_MODEL = 'gpt-4o-mini'
-OPENAI_TEMPERATURE = 0.8    
+OPENAI_MODEL = 'gpt-4o'
+OPENAI_TEMPERATURE = 0.2
 
 
 os.makedirs(CSV_DIR, exist_ok=True)
@@ -162,6 +162,7 @@ def interpret_result(user_question: str, db_result_json: str) -> str:
     If the user is asking for a graph, determine the graph type.
     """
 
+
 @function_tool
 def generate_plot_code(user_question: str) -> str:
     """
@@ -200,10 +201,131 @@ def graph_save(code_str: str)->str:
     return "Graph completed"
 
 
+@function_tool
+def find_two_columns(user_question: str, dataframe_sample: str) -> str:
+    """
+    This tool identifies two columns from the dataset for use in a time series graph.
+
+    It returns a structured dictionary with the following format:
+    FORECAST_COLUMNS: {
+        "first_column": "name of date/time/index column",
+        "second_column": "name of numeric target column",
+        "time_type": "date" | "time" | "datetime" | "index",
+        "future_values": [list of 10 future timestamps or indices]
+    }
+
+    DO NOT wrap the result in markdown or code blocks.
+    DO NOT include explanation or comments.
+    DO NOT guess columns not present in the sample.
+    """
+    return f"""
+        You are analyzing the table below to find the two best columns for a time series forecast.
+        Return the result in this exact format:
+
+        FORECAST_COLUMNS: {{
+        "first_column": "name_of_time_column",
+        "second_column": "name_of_numeric_column",
+        "time_type": "date" | "time" | "datetime" | "index",
+        "future_values": ["...next 10 values..."]
+        }}
+
+        Guidelines:
+        - Only use the column names shown in the table sample.
+        - If user refers to time, date, forecast, or trend — identify a suitable time column.
+        - Choose the numeric column that best matches the user’s intent (e.g. “sales” → Sales).
+        - Do not include explanations or markdown.
+        - The first_column must be a date/time/index column. If no time column exists, use an index.
+
+        Sample column name mappings:
+        - rain → precip
+        - temperature → temp, tempmax, tempmin
+        - wind → windspeed, windgust
+        - pressure → sealevelpressure
+        - humidity → humidity
+
+        User question:
+        {user_question}
+
+        Table sample:
+        {dataframe_sample}
+        """
+
+
+def parse_columns_dict(output_str: str) -> dict:
+    required_keys = {'first_column', 'second_column', 'time_type', 'future_values'}
+    
+    try:
+        # Ensure it's a valid JSON-like string
+        data = json.loads(output_str)
+        
+        # Validate required keys
+        if not isinstance(data, dict):
+            raise ValueError("Parsed output is not a dictionary.")
+        
+        missing_keys = required_keys - data.keys()
+        if missing_keys:
+            raise ValueError(f"Missing keys in result: {missing_keys}")
+
+        # Optional: check that future_values is a list
+        if not isinstance(data.get("future_values"), list):
+            raise ValueError("`future_values` should be a list.")
+
+        return data
+
+    except json.JSONDecodeError:
+        raise ValueError("Output is not valid JSON.")
+    except Exception as e:
+        raise ValueError(f"Failed to parse tool output: {str(e)}")
+
+
+def graph_timeseries(columns_str: str) -> str:
+    try:
+        columns_dict = parse_columns_dict(columns_str)
+        df = pd.read_csv(CSV_PATH)
+        df = df[[columns_dict['first_column'], columns_dict['second_column']]]
+        df.columns = ['ds', 'y']
+
+        if columns_dict['time_type'] != 'index':
+            df['ds'] = pd.to_datetime(df['ds'])
+
+        freq = None
+        if columns_dict['time_type'] != 'index':
+            try:
+                freq = pd.infer_freq(df['ds'].sort_values())
+                if freq is None:
+                    raise ValueError("Could not infer frequency")
+                logger.info(f"Inferred time frequency: {freq}")
+            except Exception as e:
+                freq = 'D'
+                logger.warning(f"Could not detect frequency, defaulting to 'D'. Error: {e}")
+
+        model = Prophet()
+        model.fit(df)
+
+        if columns_dict['time_type'] != 'index':
+            future = model.make_future_dataframe(periods=10, freq=freq)
+        else:
+            last_index = df['ds'].max()
+            future_indices = [last_index + i for i in range(1, 11)]
+            future = pd.DataFrame({'ds': future_indices})
+
+        forecast = model.predict(future)
+        logger.info(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
+
+        model.plot(forecast)
+        plt.savefig(GRAPH_PATH)
+        return "Graph completed"
+    except Exception as e:
+        logger.error(f"Exception - graph_timeseries: {e}")
+        raise
+
+
 @app.post("/bookkeeper")
 async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = Form(...)):
+    logger.info('*'*50)
     if not os.path.exists(CSV_PATH) and not file:
         raise HTTPException(status_code=400, detail="NO DATA FOUND. CANNOT ANSWER QUESTIONS WITHOUT DATA.")
+
     if file:
         contents = await file.read()
         with open(CSV_PATH, 'wb') as f:
@@ -214,38 +336,97 @@ async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = F
     logger.info(f"ask() - USER QUERY: {query}")
 
     df = pd.read_csv(CSV_PATH).head(50)
+    column_list = ", ".join(df.columns)
+
     agent = Agent(
         name="SQLiteGrapher",
-        instructions="You help users answer questions or graph request using a SQLite database. " \
-        "If the user request a plot or graph, generate an SQLite query based on the request," \
-        "run the sql query, generate code to create the graph and then save the graph." \
-        "Then return 'GRAPH CREATED."
-        "If the user only wants a question answered, then generate a SQLite query based on the question," \
-        "run the sql query, and then interpret the data from the result in a readable sentence." \
-        "Then return the answer in JSON as response.",
-        tools=[generate_sql, run_sql_query, generate_plot_code, graph_save, interpret_result],
+        instructions="""
+        You help users answer questions or create graphs using a SQLite database.
+
+        - For regular graph or plot requests:
+          1. Generate an SQL query
+          2. Run it
+          3. Generate matplotlib code
+          4. Save to graph/graph.png
+          5. Return 'GRAPH CREATED'
+
+        - For time series or forecast/prediction requests:
+          1. Use the `find_two_columns` tool to choose appropriate columns
+          2. Return the result in this exact format (no markdown or code blocks):
+             FORECAST_COLUMNS: { "first_column": "...", "second_column": "...", "time_type": "...", "future_values": [...] }
+          3. Do NOT include explanations or wrap it in markdown.
+          4. Do NOT call the graph tool directly.
+
+        - For regular questions:
+          1. Generate SQL
+          2. Run it
+          3. Interpret the result
+          4. Return the answer as JSON
+        """,
+        tools=[
+            generate_sql,
+            run_sql_query,
+            generate_plot_code,
+            graph_save,
+            interpret_result,
+            find_two_columns
+        ],
         model=OPENAI_MODEL,
         model_settings=ModelSettings(temperature=OPENAI_TEMPERATURE)
     )
-    message = f"""
-    The user has a question: "{query}"
 
-    Here is a preview of the table `{TABLE_NAME}`:
-    {df}
+    message = f"""
+    User request: "{query}"
+
+    Available columns: {column_list}
+
+    Here is a preview of the data (from table `{TABLE_NAME}`):
+    {df.head(50).to_string(index=False)}
+
+    Always attempt to answer using the provided data. If you're unsure, take your best guess.
     """
+
     result = await Runner.run(agent, message)
     logger.info(f"Agent result: {result.final_output}")
 
-    if 'GRAPH CREATED' in result.final_output:
-        now = datetime.now()
-        date_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
-        headers = {
-            "X-Author" : "Bookkeeper Agents",
-            "X-Description" : result.final_output,
-            "X-Created-Date" : date_time_str
-        }
-        return FileResponse(path=GRAPH_PATH, media_type="image/png", filename="graph.png", headers=headers)
+    if 'FORECAST_COLUMNS:' in result.final_output:
+        try:
+            import re
 
+            match = re.search(r'FORECAST_COLUMNS:\s*(```json)?\s*(\{.*?\})\s*(```)?', result.final_output, re.DOTALL)
+            if not match:
+                raise ValueError("Could not extract JSON block from FORECAST_COLUMNS output.")
+
+            columns_str = match.group(2).strip()
+            columns_dict = parse_columns_dict(columns_str)
+            graph_result = graph_timeseries(json.dumps(columns_dict))
+            logger.info(f"Graph generation result: {graph_result}")
+            return FileResponse(
+                path=GRAPH_PATH,
+                media_type="image/png",
+                filename="graph.png",
+                headers={
+                    "X-Author": "Bookkeeper Agents",
+                    "X-Description": "Time series forecast",
+                    "X-Created-Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+            )
+        except Exception as e:
+            logger.error(f"Time series graph failed: {e}")
+            return JSONResponse(content={"error": f"Failed to generate time series graph: {str(e)}"})
+        
+    if 'GRAPH CREATED' in result.final_output:
+        return FileResponse(
+            path=GRAPH_PATH,
+            media_type="image/png",
+            filename="graph.png",
+            headers={
+                "X-Author": "Bookkeeper Agents",
+                "X-Description": result.final_output,
+                "X-Created-Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+        )
+    
     return JSONResponse(content={"response": result.final_output})
 
 
