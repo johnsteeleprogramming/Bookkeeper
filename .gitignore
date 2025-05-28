@@ -19,9 +19,13 @@ csv/
 db/
 graph/
 temp/
+
+# Testing folders
 test/
 
 # Testing files
 bookkeeper_testing.py
+bookkeeper_test_connection.py
 test_code.py
 test_graph_agent.py
+bookkeeper_v1.py

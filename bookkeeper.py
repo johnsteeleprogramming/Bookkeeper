@@ -3,6 +3,7 @@ import json
 import re
 import sqlite3
 import logging
+import openai
 from datetime import datetime
 from typing import Optional
 import pandas as pd
@@ -62,14 +63,14 @@ templates = Jinja2Templates(directory="templates")
 def read_csv_handle_duplicate_columns(file_path):
     try:
         df = pd.read_csv(file_path)
-    except FileNotFoundError:
-        logger.error(f"File not found: {file_path}")
+    except FileNotFoundError as e:
+        logger.error(f"\tERROR read_csv_handle_duplicate_columns FILE NOT FOUND: {file_path}.\n\tERROR: {e}.")
         return pd.DataFrame()
-    except pd.errors.EmptyDataError:
-        logger.error(f"File is empty: {file_path}")
+    except pd.errors.EmptyDataError as e:
+        logger.error(f"\tERROR read_csv_handle_duplicate_columns FILE IS EMPTY: {file_path}.\n\tERROR: {e}.")
         return pd.DataFrame()
-    except pd.errors.ParserError:
-        logger.error(f"Failed to parse file: {file_path}")
+    except pd.errors.ParserError as e:
+        logger.error(f"\tERROR read_csv_handle_duplicate_columns FAILED TO PARSE FILE: {file_path}.\n\tERROR: {e}.")
         return pd.DataFrame()
 
     dup_columns = [col for col in df.columns if col.endswith('.1')]
@@ -83,16 +84,17 @@ def save_csv_to_sqlite_and_save_file(file_path):
     df = read_csv_handle_duplicate_columns(file_path)
     save_df_to_csv(df, file_path)
     if df.empty:
-        logger.warning("No data saved to SQLite")
+        logger.warning("\tWARNING save_csv_to_sqlite_and_save_file DATAFRAME IS EMPTY.")
         return
     try:
         conn = sqlite3.connect(SQLITE_DB)
         df.to_sql(TABLE_NAME, conn, if_exists='replace', index=False)
-        logger.info("CSV file saved to SQLite")
+        logger.info("\tINFO save_csv_to_sqlite_and_save_file CSV FILE SAVED TO DATABASE.")
     except sqlite3.Error as e:
-        logger.error(f"SQLite ERROR: {e}")
+        logger.error(f"\tERROR save_csv_to_sqlite_and_save_file SQLITE ERROR: {e}.")
     finally:
         if conn:
+            logger.info("\tINFO run_sql_query SQLITE3 DATABASE CONNECTION CLOSED.")
             conn.close()
 
 
@@ -132,18 +134,22 @@ def generate_sql(user_question: str, dataframe_sample: str) -> str:
 @function_tool
 def run_sql_query(sql_query: str) -> str:
     try:
-        logger.info(f"Executing SQL query:\n{sql_query}")
+        logger.info(f"\tINFO run_sql_query EXECUTING SQL QUERY:\n{sql_query}")
         conn = sqlite3.connect(SQLITE_DB)
         df = pd.read_sql_query(sql_query, conn)
-        conn.close()
-        logger.info(f"Query returned {len(df)} rows and {len(df.columns)} columns.")
+        logger.info(f"\tINFO run_sql_query QUERY RETURNED {len(df)} ROWS AND {len(df.columns)} COLUMNS.")
         if df.empty:
-            return "No results found."
+            return "run_sql_query No results found. df is empty."
         df.to_csv(TEMP_RESULTS, index=False)
         return df.to_json(orient="records")
     except Exception as e:
-        logger.error(f"SQL query execution failed: {e}")
-        return f"SQL error: {str(e)}"
+        exception_response = f"\tERROR run_sql_query SQL QUERY EXECUTION FAILED: {e}"
+        logger.error(exception_response)
+        return exception_response
+    finally:
+        if conn:
+            logger.info("\tINFO run_sql_query SQLITE3 DATABASE CONNECTION CLOSED.")
+            conn.close()
 
 
 @function_tool
@@ -208,6 +214,7 @@ def graph_save(code_str: str)->str:
 def find_two_columns(user_question: str, dataframe_sample: str) -> str:
     """
     This tool identifies two columns from the dataset for use in a time series graph.
+    It also writes the SQLite3 query to retrieve the appropriate data.
 
     It returns a structured dictionary with the following format:
     FORECAST_COLUMNS: {
@@ -215,6 +222,7 @@ def find_two_columns(user_question: str, dataframe_sample: str) -> str:
         "second_column": "name of numeric target column",
         "time_type": "date" | "time" | "datetime" | "index",
         "future_values": [list of 10 future timestamps or indices]
+        "sql_query": "sql_query_to_pull_data"
     }
 
     DO NOT wrap the result in markdown or code blocks.
@@ -226,10 +234,11 @@ def find_two_columns(user_question: str, dataframe_sample: str) -> str:
         Return the result in this exact format:
 
         FORECAST_COLUMNS: {{
-        "first_column": "name_of_time_column",
-        "second_column": "name_of_numeric_column",
-        "time_type": "date" | "time" | "datetime" | "index",
-        "future_values": ["...next 10 values..."]
+            "first_column": "name_of_time_column",
+            "second_column": "name_of_numeric_column",
+            "time_type": "date" | "time" | "datetime" | "index",
+            "future_values": ["...next 10 values..."],
+            "sql_query": "sql_query_to_pull_data"
         }}
 
         Guidelines:
@@ -238,6 +247,9 @@ def find_two_columns(user_question: str, dataframe_sample: str) -> str:
         - Choose the numeric column that best matches the user’s intent (e.g. “sales” → Sales).
         - Do not include explanations or markdown.
         - The first_column must be a date/time/index column. If no time column exists, use an index.
+        - Create an SQLite3 query which will pull the appropriate data.
+        - The SQLite3 query will use the table name `db_table`.
+        - Do not wrap the SQL query in ```sql or ```.
 
         Sample column name mappings:
         - rain → precip
@@ -255,13 +267,11 @@ def find_two_columns(user_question: str, dataframe_sample: str) -> str:
 
 
 def parse_columns_dict(output_str: str) -> dict:
-    required_keys = {'first_column', 'second_column', 'time_type', 'future_values'}
+    required_keys = {'first_column', 'second_column', 'time_type', 'future_values', 'sql_query'}
     
     try:
-        # Ensure it's a valid JSON-like string
         data = json.loads(output_str)
         
-        # Validate required keys
         if not isinstance(data, dict):
             raise ValueError("Parsed output is not a dictionary.")
         
@@ -269,12 +279,11 @@ def parse_columns_dict(output_str: str) -> dict:
         if missing_keys:
             raise ValueError(f"Missing keys in result: {missing_keys}")
 
-        # Optional: check that future_values is a list
         if not isinstance(data.get("future_values"), list):
             raise ValueError("`future_values` should be a list.")
 
         return data
-
+    
     except json.JSONDecodeError:
         raise ValueError("Output is not valid JSON.")
     except Exception as e:
@@ -284,64 +293,91 @@ def parse_columns_dict(output_str: str) -> dict:
 def graph_timeseries(columns_str: str) -> str:
     try:
         columns_dict = parse_columns_dict(columns_str)
-        df = pd.read_csv(CSV_PATH)
-        df = df[[columns_dict['first_column'], columns_dict['second_column']]]
-        df.columns = ['ds', 'y']
+        logger.info(f"\tINFO graph_timeseries SQL QUERY: {columns_dict['sql_query']}")
+        sql_query = re.sub(r"```(?:sql)?\s*([\s\S]*?)\s*```", r"\1", columns_dict['sql_query']).strip()
+        logger.info(f"\tINFO graph_timeseries SQL CLEANED QUERY: {sql_query}")
+        
+        conn = sqlite3.connect(SQLITE_DB)
+        df = pd.read_sql_query(sql_query, conn)
+
+        logger.info(f"\tINFO graph_timeseries QUERY RETURNED {len(df)} ROWS AND {len(df.columns)} COLUMNS.")
+        if df.empty:
+            return "graph_timeseries No results found. df empty."
+
+        df_all = df[[columns_dict['first_column'], columns_dict['second_column']]].copy()
+        df_all.columns = ['ds', 'y']
 
         if columns_dict['time_type'] != 'index':
-            df['ds'] = pd.to_datetime(df['ds'])
+            df_all['ds'] = pd.to_datetime(df_all['ds'])
+
+        df_recent = df_all.tail(30)
 
         freq = None
         if columns_dict['time_type'] != 'index':
             try:
-                freq = pd.infer_freq(df['ds'].sort_values())
+                freq = pd.infer_freq(df_all['ds'].sort_values())
                 if freq is None:
                     raise ValueError("Could not infer frequency")
-                logger.info(f"Inferred time frequency: {freq}")
+                logger.info(f"\tINFO graph_timeseries INFERRED TIME FREQUENCY: {freq}")
             except Exception as e:
                 freq = 'D'
-                logger.warning(f"Could not detect frequency, defaulting to 'D'. Error: {e}")
+                logger.warning(f"\tWARNING graph_timeseries COULD NOT DETECT FREQUENCY, DEFAULTING TO 'D'. \n\tERROR : {e}")
 
         model = Prophet()
-        model.fit(df)
+        model.fit(df_all)
 
         if columns_dict['time_type'] != 'index':
             future = model.make_future_dataframe(periods=10, freq=freq)
         else:
-            last_index = df['ds'].max()
+            last_index = df_all['ds'].max()
             future_indices = [last_index + i for i in range(1, 11)]
             future = pd.DataFrame({'ds': future_indices})
 
         forecast = model.predict(future)
-        logger.info(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
+        logger.info(f"\tINFO graph_timeseries FORECAST TAIL:\n{forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail()}")
 
-        model.plot(forecast)
+        plot_start = df_recent['ds'].min()
+        plot_end = forecast['ds'].max()
+
+        fig = model.plot(forecast)
+        ax = fig.gca()
+        ax.set_xlim([plot_start, plot_end])
         plt.savefig(GRAPH_PATH)
+
         return "Graph completed"
+
+    except sqlite3.Error as e:
+        logger.error(f"\tERROR graph_timeseries SQLITE3.ERROR: {e}")
     except Exception as e:
-        logger.error(f"Exception - graph_timeseries: {e}")
+        logger.error(f"\tERROR graph_timeseries EXCEPTION: {e}")
         raise
+    finally:
+        if conn:
+            logger.info("\tINFO run_sql_query SQLITE3 DATABASE CONNECTION CLOSED.")
+            conn.close()
 
 
 @app.post("/bookkeeper")
 async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = Form(...)):
     logger.info('*'*50)
+    load_dotenv(override=True)
+    openai.api_key = os.getenv("OPENAI_API_KEY")
     if not os.path.exists(CSV_PATH) and not file:
         raise HTTPException(status_code=400, detail="NO DATA FOUND. CANNOT ANSWER QUESTIONS WITHOUT DATA.")
-    logger.info(f"ask() - USER QUERY: {query}")
+    logger.info(f"\tINFO upload_and_ask USER QUERY: {query}")
 
     if file:
         contents = await file.read()
         result = from_bytes(contents).best()
         encoding = result.encoding or 'utf-8'
-        logger.info(f"CSV input file encoding: {encoding}")
+        logger.info(f"\tINFO upload_and_ask CSV FILE ENCODING: {encoding}")
         decoded_contents = contents.decode(encoding)
 
         with open(CSV_PATH, 'w', encoding='utf-8') as f:
             f.write(decoded_contents)
 
         save_csv_to_sqlite_and_save_file(CSV_PATH)
-        logger.info(f"File {os.path.basename(file.filename)} saved successfully to database")
+        logger.info(f"\tINFO upload_and_ask FILE {os.path.basename(file.filename)} UPLOADED TO DATABASE.")
 
     df = pd.read_csv(CSV_PATH).head(50)
     column_list = ", ".join(df.columns)
@@ -393,45 +429,46 @@ async def upload_and_ask(file: Optional[UploadFile] = File(None), query: str = F
 
     Always attempt to answer using the provided data. If you're unsure, take your best guess.
     """
+    try:
+        result = await Runner.run(agent, message)
+    except Exception as e:
+        logger.error(f"\tERROR upload_and_ask RUNNER ERROR: {e}")
+        return JSONResponse(status_code=500, content={"error": f"RUNNER ERROR: {str(e)}"})
 
-    result = await Runner.run(agent, message)
-    logger.info(f"Agent result: {result.final_output}")
+    logger.info(f"\tINFO upload_and_ask AGENT RESULT: {result.final_output}")
 
     if 'FORECAST_COLUMNS:' in result.final_output:
         try:
             cleaned_output = re.sub(r"```(?:sql)?\s*([\s\S]*?)\s*```", r"\1", result.final_output).strip()
             if not cleaned_output:
                 raise ValueError("Could not extract JSON block from FORECAST_COLUMNS output.")
-
-            columns_str = cleaned_output.group(2).strip()
+            logger.info(f"\tINFO upload_and_ask CLEANED OUTPUT: {cleaned_output}")
+            match = re.search(r'FORECAST_COLUMNS:\s*({[\s\S]*})', cleaned_output)
+            if not match:
+                raise ValueError("Could not extract JSON object from FORECAST_COLUMNS")
+            columns_str = match.group(1)
             columns_dict = parse_columns_dict(columns_str)
+            logger.info("\tINFO upload_and_ask **** columns_dict ****")
+            logger.info(columns_dict)
             graph_result = graph_timeseries(json.dumps(columns_dict))
-            logger.info(f"Graph generation result: {graph_result}")
-            return FileResponse(
-                path=GRAPH_PATH,
-                media_type="image/png",
-                filename="graph.png",
-                headers={
+            logger.info(f"\tINFO upload_and_ask GRAPH GENERATION RESULT: {graph_result}")
+            headers={
                     "X-Author": "Bookkeeper Agents",
                     "X-Description": "Time series forecast",
                     "X-Created-Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
-            )
+            return FileResponse(path=GRAPH_PATH, media_type="image/png", filename="graph.png", headers=headers)
         except Exception as e:
-            logger.error(f"Time series graph failed: {e}")
-            return JSONResponse(content={"error": f"Failed to generate time series graph: {str(e)}"})
+            logger.error(f"\tERROR upload_and_ask TIME SERIES GRAPH FAILED: {e}")
+            return JSONResponse(status_code=500, content={"error": f"Failed to generate time series graph: {str(e)}"})
         
     if 'GRAPH CREATED' in result.final_output:
-        return FileResponse(
-            path=GRAPH_PATH,
-            media_type="image/png",
-            filename="graph.png",
-            headers={
+        headers={
                 "X-Author": "Bookkeeper Agents",
                 "X-Description": result.final_output,
                 "X-Created-Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-        )
+        return FileResponse(path=GRAPH_PATH, media_type="image/png", filename="graph.png", headers=headers)
     
     return JSONResponse(content={"response": result.final_output})
 
